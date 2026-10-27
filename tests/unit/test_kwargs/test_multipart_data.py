@@ -13,7 +13,7 @@ import pytest
 from litestar import Request, post
 from litestar.datastructures.upload_file import UploadFile
 from litestar.enums import RequestEncodingType
-from litestar.params import Body, MultipartBody
+from litestar.params import Body, MultipartBody, URLEncodedBody
 from litestar.status_codes import (
     HTTP_201_CREATED,
     HTTP_400_BAD_REQUEST,
@@ -694,6 +694,41 @@ def test_optional_upload_file_without_file_submitted() -> None:
         response = client.post("/", files={"file": ("test.txt", b"hello", "text/plain")})
         assert response.status_code == HTTP_201_CREATED
         assert response.text == "file"
+
+
+# https://github.com/litestar-org/litestar/issues/5135
+def test_multipart_body_marker_merges_body_settings() -> None:
+    @post(path="/form")
+    def test_method(
+        data: Annotated[MultipartBody[dict[str, Any]], Body(multipart_form_part_limit=1, title="T")],
+    ) -> None:
+        return None
+
+    with create_test_client(test_method) as client:
+        # the part limit declared in 'Body(...)' is enforced, not silently dropped
+        response = client.post("/form", files={"a": (None, "1"), "b": (None, "2"), "c": (None, "3")})
+        assert response.status_code == HTTP_413_REQUEST_ENTITY_TOO_LARGE
+
+        request_body = client.app.openapi_schema.paths["/form"].post.request_body
+        assert request_body is not None
+        schema = request_body.content[RequestEncodingType.MULTI_PART].schema
+        assert schema.title == "T"  # type: ignore[union-attr]
+
+
+def test_url_encoded_body_marker_merges_body_settings() -> None:
+    @post(path="/form")
+    def test_method(data: Annotated[URLEncodedBody[dict[str, Any]], Body(title="T")]) -> dict[str, Any]:
+        return data
+
+    with create_test_client(test_method) as client:
+        response = client.post("/form", data={"a": "1"})
+        assert response.status_code == HTTP_201_CREATED
+        assert response.json() == {"a": "1"}
+
+        request_body = client.app.openapi_schema.paths["/form"].post.request_body
+        assert request_body is not None
+        schema = request_body.content[RequestEncodingType.URL_ENCODED].schema
+        assert schema.title == "T"  # type: ignore[union-attr]
 
 
 # https://github.com/litestar-org/litestar/issues/4638

@@ -46,7 +46,7 @@ except ImportError:
     TypeAliasTypes = (TeTypeAliasType,)  # type: ignore[assignment]
 
 from litestar.exceptions import ImproperlyConfiguredException
-from litestar.params import KwargDefinition, ParameterKwarg, ParameterMarker
+from litestar.params import BodyKwarg, KwargDefinition, ParameterKwarg, ParameterMarker
 from litestar.types.builtin_types import NoneType, UnionTypes
 from litestar.utils.predicates import (
     is_any,
@@ -473,7 +473,25 @@ class FieldDefinition:
             raise_for_kwarg_as_default(default)
 
         if not kwargs.get("kwarg_definition"):
-            if kwarg_definition := next((v for v in metadata if isinstance(v, KwargDefinition)), None):
+            kwarg_definitions = [v for v in metadata if isinstance(v, KwargDefinition)]
+            if kwarg_definitions:
+                kwarg_definition = kwarg_definitions[0]
+                if isinstance(kwarg_definition, BodyKwarg):
+                    # a body marker (e.g. ``MultipartBody[...]``) contributes its own
+                    # ``BodyKwarg``; a ``Body(...)`` written next to it declares the
+                    # remaining settings on a second one. Merge them instead of
+                    # silently dropping every setting of the later one. The first
+                    # one's media type wins: it is the marker's whole point, and the
+                    # ``Body(...)`` default would otherwise clobber it.
+                    for other in kwarg_definitions[1:]:
+                        if isinstance(other, BodyKwarg):
+                            overrides = {
+                                f.name: getattr(other, f.name)
+                                for f in dataclasses.fields(other)
+                                if f.name != "media_type" and getattr(other, f.name) is not None
+                            }
+                            if overrides:
+                                kwarg_definition = dataclasses.replace(kwarg_definition, **overrides)
                 kwargs["kwarg_definition"] = kwarg_definition
 
                 metadata = tuple(v for v in metadata if not isinstance(v, KwargDefinition))
