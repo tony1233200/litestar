@@ -15,6 +15,7 @@ from litestar.plugins import DIPlugin
 
 __all__ = ("MsgspecDIPlugin", "kwarg_definition_from_field")
 
+from litestar.types import Empty
 from litestar.utils.typing import unwrap_annotation
 
 
@@ -31,13 +32,21 @@ class MsgspecDIPlugin(DIPlugin):
             if not any(isinstance(m, ParameterKwarg) for m in metadata):
                 type_ = NamedDependency[type_]  # type: ignore[misc]
 
+            default = field_info.default
+            if default is msgspec.NODEFAULT and field_info.default_factory is msgspec.NODEFAULT:
+                # a required field has no default; passing the ``NODEFAULT`` sentinel
+                # through would make it look defaulted, so a field that is neither
+                # provided, defaulted nor declared as a parameter would only fail
+                # at request time instead of when the app is created
+                default = Empty
+
             type_hints[field_info.name] = type_
             parameters.append(
                 inspect.Parameter(
                     name=field_info.name,
                     kind=inspect.Parameter.KEYWORD_ONLY,
                     annotation=type_,
-                    default=field_info.default,
+                    default=default,
                 )
             )
         return inspect.Signature(parameters), type_hints

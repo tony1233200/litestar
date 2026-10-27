@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 
 import msgspec
+import pytest
 
-from litestar import Controller, get
+from litestar import Controller, Litestar, get
 from litestar.di import NamedDependency, Provide
+from litestar.exceptions import ImproperlyConfiguredException
 from litestar.params import FromPath, FromQuery
 from litestar.testing import create_test_client
 
@@ -71,3 +73,52 @@ def test_inject_msgspec_struct() -> None:
         res = client.get("/?bar=baz")
         assert res.status_code == 200
         assert res.json() == {"bar": "baz"}
+
+
+def test_inject_msgspec_struct_unmarked_required_field_without_provider_raises() -> None:
+    class Foo(msgspec.Struct):
+        bar: str
+
+    @get("/", dependencies={"foo": Provide(Foo, sync_to_thread=False)})
+    async def handler(foo: NamedDependency[Foo]) -> Foo:
+        return foo
+
+    with pytest.raises(ImproperlyConfiguredException):
+        Litestar([handler])
+
+
+def test_inject_msgspec_struct_unmarked_field_with_provider() -> None:
+    class Foo(msgspec.Struct):
+        bar: str
+
+    async def provide_bar() -> str:
+        return "from-provider"
+
+    @get(
+        "/",
+        dependencies={
+            "foo": Provide(Foo, sync_to_thread=False),
+            "bar": Provide(provide_bar),
+        },
+    )
+    async def handler(foo: NamedDependency[Foo]) -> Foo:
+        return foo
+
+    with create_test_client([handler]) as client:
+        res = client.get("/")
+        assert res.status_code == 200
+        assert res.json() == {"bar": "from-provider"}
+
+
+def test_inject_msgspec_struct_unmarked_field_with_default() -> None:
+    class Foo(msgspec.Struct):
+        bar: str = "default"
+
+    @get("/", dependencies={"foo": Provide(Foo, sync_to_thread=False)})
+    async def handler(foo: NamedDependency[Foo]) -> Foo:
+        return foo
+
+    with create_test_client([handler]) as client:
+        res = client.get("/")
+        assert res.status_code == 200
+        assert res.json() == {"bar": "default"}
